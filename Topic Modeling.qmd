@@ -1,0 +1,148 @@
+---
+title: "Topic Modeling"
+format: pdf
+editor: visual
+---
+
+  Set the library and the data
+
+```{r}
+library(tidyr)
+library(topicmodels)
+library(dplyr)
+library(tidyverse)
+library(tm)
+library(wordcloud)
+library(ggwordcloud)
+library(tidytext)
+library(textrank)
+
+topicdata<- read.csv("C:/Users/16597/Downloads/movie_plots.csv")
+head(topicdata)
+```
+
+  Creating a corpus and clean it, then creating a document term matrix.
+
+```{r}
+topiccorp<- Corpus(VectorSource(topicdata$Plot))
+topiccorp<- tm_map(topiccorp, content_transformer(tolower))
+topiccorp<- tm_map(topiccorp, removePunctuation)                   
+topiccorp<- tm_map(topiccorp, removeNumbers)                       
+topiccorp<- tm_map(topiccorp, removeWords, stopwords("english"))
+topiccorp<- tm_map(topiccorp, stripWhitespace)
+# Create the dtm
+dtm <- DocumentTermMatrix(topiccorp, control = list(wordLengths = c(3, Inf)))
+```
+
+  Next step is evaluating the topics, selecting the number of possible topics from the data.
+
+```{r}
+k_values<- seq(2, 20, by = 2)
+
+perplexities<- numeric(length(k_values))
+
+for (i in seq_along(k_values)) {
+  k <- k_values[i]
+  
+# Creating LDA model
+  lda_model <- LDA(dtm, k = k, control = list(seed = 1066))
+  
+  perplexities[i] <- perplexity(lda_model, dtm)
+}
+
+perplexity_df <- data.frame(
+  Topics = k_values,
+  Perplexity = perplexities
+)
+
+# Plot the perplexity curve
+ggplot(perplexity_df, aes(x = Topics, y = Perplexity)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Perplexity for Different Numbers of Topics",
+       x = "Number of Topics",
+       y = "Perplexity") +
+  theme_minimal()
+```
+
+ Based on the perplexity plot, there is no sharp "elbow" indicating a clear inflection point, but there exists the trend. The perplexity decreases gradually as the number of topics increases, and it begins to flatten out slightly around 10–12 topics. This suggests that adding more topics beyond this point has diminishing returns in terms of perplexity reduction. Suppose there are 10 possible topics. My next step is fitting the final LDA model.
+
+```{r}
+# Set k (the number of topics) equal to 10
+k<- 10
+
+lda<- LDA(dtm, k = k, control = list(seed = 1234))
+print(lda)
+
+# Extract top terms of the topic
+
+topics<- tidy(lda, matrix = "beta")
+
+# Get the top 10 terms for each topic based on term probability within the topic
+topterms<- topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+# Display the top terms for each topic
+print(topterms)
+```
+
+Before visualizing the word cloud, we first visualize the topterms.
+
+```{r}
+topterms %>%
+  mutate(term = reorder_within(term, beta, topic))%>%
+  ggplot(aes(beta, term, fill = factor(topic)))+
+  geom_col(show.legend = FALSE)+
+  facet_wrap(~ topic, scales = "free")+
+  scale_y_reordered()+
+  scale_x_continuous(labels = scales::number_format(accuracy = 0.001))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 5))+
+  labs(title = "Top Terms in Each Topic",
+       x = "Probability",
+       y = "Term")
+```
+
+In the mean time, I try to analyze the distribution of top topics, then I tried to build labels based on the distribution and the visualization.
+
+```{r}
+# Get the gamma matrix to represent the topic distribution across documents
+documenttopics<- tidy(lda, matrix = "gamma")
+
+# Display the topic distribution for each document
+print(documenttopics)
+
+# Label the topics
+
+topic_keywords<- textrank_keywords(topterms %>% filter(topic == 3) %>% pull(term), ngram_max = 2)
+print(topic_keywords)
+```
+
+The first topic contains "king", "world", "man", "war", so the first label is related to War/Adventure.
+
+The second topic contains "love", "match", "christmas", so it can be Romance/Christmas.
+
+The third topic has "town", "two", "life", "ranch", so the label can be Life and Love in the countryside.
+
+Similarly, I can label other topics by their key words. For example, 4-Crime/Gang, 5-Money/Crime, 6-War and Family, 7-Life in Towns and Dramas, 8-World and Wars, 9-Gang Fights and Worlds, 10-Youth, Love and Life.
+
+After analyzing the labels, it is easy to find that these movies are about love and life, wars, gangs and crimes.
+
+Since I have the information I want, I can create the word clouds.
+
+```{r}
+for(topic_num in unique(topterms$topic)){
+  topic_words<-filter(topterms, topic == topic_num)
+  
+  wordcloud(
+    words= topic_words$term,
+    freq= topic_words$beta,
+    max.words= 30,
+    random.order= FALSE,
+    colors= brewer.pal(8, "Dark2")
+  )
+}
+```
